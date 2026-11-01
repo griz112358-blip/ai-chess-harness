@@ -1,0 +1,40 @@
+{
+  "name": "ai-chess-harness",
+  "version": "1.0.0",
+  "description": "AI 国际象棋陪练：大模型 + 本地业务适配器 Demo",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.web.json",
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:web": "vite",
+    "build": "vite build",
+    "start": "tsx server/index.ts",
+    "check": "npm run typecheck && tsx src/types.check.ts && tsx src/agentState.check.ts && tsx src/provider/minimax.check.ts && tsx src/loop.check.ts && tsx check/adapter.check.ts"
+  },
+  "keywords": [
+    "agent",
+    "harness",
+    "chess",
+    "minimax"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "chess.js": "^1.4.0",
+    "express": "^5.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "concurrently": "^10.0.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}
