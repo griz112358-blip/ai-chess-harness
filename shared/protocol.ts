@@ -45,6 +45,18 @@ export type ServerEvent =
   | { type: "model_call"; step: number; toolNames: string[] }
   | { type: "model_text"; text: string }
   | { type: "reasoning"; text: string }
+  | {
+      /** 本次模型调用的 token 用量与耗时。 */
+      type: "usage";
+      /** 本回合内的第几次模型调用（从 1 开始）。 */
+      call: number;
+      promptTokens: number;
+      completionTokens: number;
+      totalTokens: number;
+      elapsedMs: number;
+      /** true = 接口没返回 usage，这是本地估算值。 */
+      estimated: boolean;
+    }
   | { type: "tool_call"; name: string; arguments: Record<string, unknown> }
   | { type: "tool_result"; name: string; ok: boolean; summary: string }
   | { type: "draw_offer"; by: PlayerColor }

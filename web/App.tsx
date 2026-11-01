@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChessBoard } from "./components/ChessBoard";
 import { ChatPanel } from "./components/ChatPanel";
-import type { ChatMessage } from "./components/ChatPanel";
+import type { ChatMessage, TurnUsage } from "./components/ChatPanel";
 import { HarnessLog } from "./components/HarnessLog";
 import type { LogEntry } from "./components/HarnessLog";
 import { SetupGate } from "./components/SetupGate";
@@ -32,6 +32,8 @@ export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const textBuffer = useRef<string>("");
+  /** 本回合的 token 用量累积（回合结束时结算成一条小结）。 */
+  const usageAcc = useRef<TurnUsage | null>(null);
 
   /* ---------------- 初始化 ---------------- */
   useEffect(() => {
@@ -102,9 +104,45 @@ export default function App() {
             { id: nextId(), role: "system", text: event.hint ? `${event.message}\n${event.hint}` : event.message },
           ]);
           break;
-        case "done":
-          flushText();
+        case "usage": {
+          // 接口返回真值就用真值；没有就本地估算并标成"估算值"
+          const acc = usageAcc.current;
+          if (acc) {
+            acc.calls += 1;
+            acc.promptTokens += event.promptTokens;
+            acc.completionTokens += event.completionTokens;
+            acc.totalTokens += event.totalTokens;
+            acc.elapsedMs += event.elapsedMs;
+            acc.estimated = acc.estimated && event.estimated;
+          } else {
+            usageAcc.current = {
+              calls: 1,
+              promptTokens: event.promptTokens,
+              completionTokens: event.completionTokens,
+              totalTokens: event.totalTokens,
+              elapsedMs: event.elapsedMs,
+              estimated: event.estimated,
+            };
+          }
+          pushLog(
+            "model",
+            `第 ${event.call} 次调用：输入 ${event.promptTokens} / 输出 ${event.completionTokens} tokens` +
+              ` · ${(event.elapsedMs / 1000).toFixed(1)}s${event.estimated ? "（估算）" : ""}`,
+          );
           break;
+        }
+        case "done": {
+          flushText();
+          const acc = usageAcc.current;
+          usageAcc.current = null;
+          if (acc && acc.calls > 0) {
+            setMessages((prev) => [
+              ...prev,
+              { id: nextId(), role: "ai", text: "", kind: "usage", usage: acc },
+            ]);
+          }
+          break;
+        }
         default:
           break;
       }

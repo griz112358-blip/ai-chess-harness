@@ -14,10 +14,11 @@ export default defineConfig({
   root: resolve(here, "web"),
   plugins: [react()],
   server: {
-    port: 5178,
+    port: Number(process.env["PORT"] ?? 5178),
     proxy: {
+      // VITE_API_TARGET 可以把前端指向别的后端（比如本地 mock 实例）
       "/api": {
-        target: "http://localhost:8787",
+        target: process.env["VITE_API_TARGET"] ?? "http://localhost:8787",
         changeOrigin: true,
       },
     },

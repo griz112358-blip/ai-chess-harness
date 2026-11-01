@@ -13,6 +13,7 @@
  */
 
 import { addAssistantMessage, addUserMessage, createAgentState } from "../src/agentState.js";
+import type { ModelMessage } from "../src/agentState.js";
 import { runAgentLoop } from "../src/loop.js";
 import type { CallModelFn } from "../src/loop.js";
 import type { LoopEvent } from "../src/loop.js";
@@ -61,6 +62,55 @@ export interface TurnResult {
   said: string[];
   /** 调了几次模型。 */
   rounds: number;
+}
+
+/**
+ * 粗略 token 估算（接口没返回 usage 时兜底）。
+ * 口径和 harness 的 estimateTokens 一致：字符数 / 4，只用于"大概花了多少"。
+ */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/**
+ * emitUsage —— 汇报这一次模型调用的 token 用量与耗时。
+ *
+ * 接口返回了 usage 就用真值；没返回（比如流被中断、或网关不支持 include_usage）
+ * 就本地估算并标记 estimated=true，界面上会写明"估算"，不假装是真实账单数据。
+ */
+function emitUsage(
+  response: ModelResponse,
+  messages: ModelMessage[],
+  elapsedMs: number,
+  calls: number,
+  emit: (event: ServerEvent) => void,
+): void {
+  const usage = response.usage;
+  const hasReal =
+    usage !== undefined &&
+    typeof usage.promptTokens === "number" &&
+    typeof usage.completionTokens === "number";
+
+  const promptTokens = hasReal
+    ? usage!.promptTokens!
+    : estimateTokens(
+        messages
+          .map((m) => `${m.content}${m.toolCalls ? JSON.stringify(m.toolCalls) : ""}`)
+          .join(""),
+      );
+  const completionTokens = hasReal
+    ? usage!.completionTokens!
+    : estimateTokens(`${response.text}${JSON.stringify(response.toolCalls)}`);
+
+  emit({
+    type: "usage",
+    call: calls,
+    promptTokens,
+    completionTokens,
+    totalTokens: usage?.totalTokens ?? promptTokens + completionTokens,
+    elapsedMs,
+    estimated: !hasReal,
+  });
 }
 
 /** 给前端下发权威快照。 */
@@ -112,21 +162,24 @@ export async function runAITurn(session: GameSession, options: TurnOptions): Pro
     toolTable: ToolTable,
   ): Promise<ModelResponse> => {
     rounds += 1;
+    const startedAt = Date.now();
+    let response: ModelResponse;
     if (options.callModel) {
-      return options.callModel(messages, toolTable);
-    }
-    if (options.mock) {
+      response = await options.callModel(messages, toolTable);
+    } else if (options.mock) {
       const mock = createSmartMockCallModel();
-      const response = await mock(messages, toolTable);
+      response = await mock(messages, toolTable);
       if (response.text) emit({ type: "model_text", text: response.text });
-      return response;
+    } else {
+      response = await callModelStream(config, messages, toolTable, {
+        onEvent: (event) => {
+          if (event.type === "text") emit({ type: "model_text", text: event.delta });
+          if (event.type === "reasoning") emit({ type: "reasoning", text: event.delta });
+        },
+      });
     }
-    return callModelStream(config, messages, toolTable, {
-      onEvent: (event) => {
-        if (event.type === "text") emit({ type: "model_text", text: event.delta });
-        if (event.type === "reasoning") emit({ type: "reasoning", text: event.delta });
-      },
-    });
+    emitUsage(response, messages, Date.now() - startedAt, rounds, emit);
+    return response;
   };
 
   const onLoopEvent = (event: LoopEvent): void => {

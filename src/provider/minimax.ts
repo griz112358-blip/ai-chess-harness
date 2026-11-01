@@ -273,6 +273,7 @@ function buildRequestBody(
   messages: ModelMessage[],
   tools: ToolTable,
   stream: boolean,
+  includeUsage = true,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: config.model,
@@ -286,6 +287,10 @@ function buildRequestBody(
   if (typeof config.temperature === "number") body.temperature = config.temperature;
   if (typeof config.maxTokens === "number") body.max_completion_tokens = config.maxTokens;
   if (config.thinking) body.thinking = { type: config.thinking };
+  if (stream && includeUsage) {
+    // 流式默认不返回 token 用量，显式打开（MiniMax 支持，末尾会带完整 usage）
+    body.stream_options = { include_usage: true };
+  }
   return body;
 }
 
@@ -457,6 +462,28 @@ export async function callModelStream(
     onEvent?: (event: StreamEvent) => void;
   } = {},
 ): Promise<ModelResponse> {
+  try {
+    return await streamOnce(config, messages, tools, opts, true);
+  } catch (error) {
+    // 某些网关不认 stream_options.include_usage → 去掉它再试一次（少一个 token 统计而已）
+    if (error instanceof MiniMaxError && error.code === 2013) {
+      return await streamOnce(config, messages, tools, opts, false);
+    }
+    throw error;
+  }
+}
+
+/** 单次流式调用（includeUsage 开关）。 */
+async function streamOnce(
+  config: MiniMaxConfig,
+  messages: ModelMessage[],
+  tools: ToolTable,
+  opts: {
+    signal?: AbortSignal;
+    onEvent?: (event: StreamEvent) => void;
+  },
+  includeUsage: boolean,
+): Promise<ModelResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.timeoutMs ?? 90_000);
   const onAbort = () => controller.abort();
@@ -471,7 +498,7 @@ export async function callModelStream(
           "Content-Type": "application/json",
           Authorization: `Bearer ${config.apiKey}`,
         },
-        body: JSON.stringify(buildRequestBody(config, messages, tools, true)),
+        body: JSON.stringify(buildRequestBody(config, messages, tools, true, includeUsage)),
         signal: controller.signal,
       });
     } catch (error) {

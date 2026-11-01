@@ -8,10 +8,31 @@
 
 import { useEffect, useRef, useState } from "react";
 
+/** 一回合的 token 用量。 */
+export interface TurnUsage {
+  /** 本回合模型调用了几次。 */
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  /** 模型耗时合计（毫秒）。 */
+  elapsedMs: number;
+  /** true = 接口没返回 usage，这是本地估算值。 */
+  estimated: boolean;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "ai" | "system";
   text: string;
+  /** "usage" 表示这是一条用量小结，不是对话气泡。 */
+  kind?: "chat" | "usage";
+  usage?: TurnUsage;
+}
+
+/** 千分位格式化。 */
+function formatTokens(value: number): string {
+  return value.toLocaleString("zh-CN");
 }
 
 interface ChatPanelProps {
@@ -50,14 +71,26 @@ export function ChatPanel(props: ChatPanelProps) {
             </ul>
           </div>
         ) : null}
-        {messages.map((message) => (
-          <div key={message.id} className={`bubble ${message.role}`}>
-            <span className="who">
-              {message.role === "user" ? "你" : message.role === "ai" ? "AI 陪练" : "系统"}
-            </span>
-            <p>{message.text}</p>
-          </div>
-        ))}
+        {messages.map((message) =>
+          message.kind === "usage" && message.usage ? (
+            <div key={message.id} className="usage-line">
+              <span className="usage-dot" />
+              <span className="usage-text">
+                本回合 {message.usage.calls} 次调用 · 输入 {formatTokens(message.usage.promptTokens)} / 输出{" "}
+                {formatTokens(message.usage.completionTokens)} tokens · 耗时{" "}
+                {(message.usage.elapsedMs / 1000).toFixed(1)}s
+                {message.usage.estimated ? " · 估算值" : ""}
+              </span>
+            </div>
+          ) : (
+            <div key={message.id} className={`bubble ${message.role}`}>
+              <span className="who">
+                {message.role === "user" ? "你" : message.role === "ai" ? "AI 陪练" : "系统"}
+              </span>
+              <p>{message.text}</p>
+            </div>
+          ),
+        )}
         {busy ? <div className="bubble ai thinking">正在思考……</div> : null}
         <div ref={bottomRef} />
       </div>
