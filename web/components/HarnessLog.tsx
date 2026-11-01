@@ -32,6 +32,9 @@ function formatTime(value: number): string {
   ).padStart(2, "0")}`;
 }
 
+/** 日志单行最多显示多少字符（超出部分悬停可见）。 */
+const MAX_LOG_CHARS = 400;
+
 export function HarnessLog(props: HarnessLogProps) {
   const { entries } = props;
   return (
@@ -43,7 +46,11 @@ export function HarnessLog(props: HarnessLogProps) {
         <div key={entry.id} className={`log-row ${entry.kind}`}>
           <span className="log-time">{formatTime(entry.time)}</span>
           <span className="log-kind">{KIND_LABEL[entry.kind]}</span>
-          <span className="log-text">{entry.text}</span>
+          <span className="log-text" title={entry.text}>
+            {entry.text.length > MAX_LOG_CHARS
+              ? `${entry.text.slice(0, MAX_LOG_CHARS)}…（共 ${entry.text.length} 字）`
+              : entry.text}
+          </span>
         </div>
       ))}
     </div>

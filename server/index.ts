@@ -49,6 +49,8 @@ interface ClientConfig {
   model: string;
   temperature: number;
   disableThinking: boolean;
+  /** 输出 token 上限（思考模型需要给足空间）。 */
+  maxTokens?: number;
   mock: boolean;
 }
 
@@ -62,8 +64,9 @@ function readConfig(req: Request): ClientConfig {
   const model = (typeof body["model"] === "string" && body["model"].trim()) || DEFAULT_MODEL;
   const temperature = typeof body["temperature"] === "number" ? body["temperature"] : 0.7;
   const disableThinking = body["disableThinking"] === true;
+  const maxTokens = typeof body["maxTokens"] === "number" ? body["maxTokens"] : undefined;
   const mock = MOCK || body["mock"] === true;
-  return { apiKey, baseUrl, model, temperature, disableThinking, mock };
+  return { apiKey, baseUrl, model, temperature, disableThinking, maxTokens, mock };
 }
 
 function toMiniMaxConfig(config: ClientConfig): MiniMaxConfig {
@@ -72,7 +75,10 @@ function toMiniMaxConfig(config: ClientConfig): MiniMaxConfig {
     baseUrl: config.baseUrl,
     model: config.model,
     temperature: config.temperature,
-    maxTokens: 4096,
+    // 关键：思考模型会把输出预算先烧在 think 块上。
+    // 预算太小 → 正文和工具调用被截断 → 看起来"花了钱却什么都没发生"。
+    // 所以关掉思考时给小预算，开思考时给足空间。
+    maxTokens: config.maxTokens ?? (config.disableThinking ? 8192 : 32_768),
     timeoutMs: 120_000,
     thinking: config.disableThinking ? "disabled" : undefined,
   };

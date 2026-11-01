@@ -12,7 +12,48 @@ import type { GameSnapshot, PlayerColor } from "./protocol.js";
 /** 棋局阶段，决定给模型检索哪部分知识库。 */
 export type GamePhase = "opening" | "middlegame" | "endgame";
 
+/** 各子力价值（用于子力差计算）。 */
 const PIECE_VALUES: Record<string, number> = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+
+/** 子力差的文字描述用。 */
+const PIECE_NAMES: Record<string, string> = { p: "兵", n: "马", b: "象", r: "车", q: "后", k: "王" };
+
+/** 统计双方各兵种数量。 */
+function countPieces(chess: Chess): { w: Record<string, number>; b: Record<string, number> } {
+  const w: Record<string, number> = {};
+  const b: Record<string, number> = {};
+  for (const row of chess.board()) {
+    for (const cell of row) {
+      if (!cell) continue;
+      const bucket = cell.color === "w" ? w : b;
+      bucket[cell.type] = (bucket[cell.type] ?? 0) + 1;
+    }
+  }
+  return { w, b };
+}
+
+/**
+ * describeMaterial —— 把子力差说成人话。
+ *
+ * 之前写的是"白方多 4 个兵"，其实是"多 4 分"（1 马 + 1 兵），
+ * 模型读到这句话后专门花了好几段思考去核对，还以为程序算错了。
+ */
+export function describeMaterial(chess: Chess): string {
+  const { w, b } = countPieces(chess);
+  const diff = materialDiff(chess);
+  if (diff === 0) return "子力持平";
+
+  const richer = diff > 0 ? w : b;
+  const poorer = diff > 0 ? b : w;
+  const richerSide = diff > 0 ? "白方" : "黑方";
+  const parts: string[] = [];
+  for (const type of ["q", "r", "b", "n", "p"]) {
+    const delta = (richer[type] ?? 0) - (poorer[type] ?? 0);
+    if (delta > 0) parts.push(`${delta} ${PIECE_NAMES[type] ?? type}`);
+  }
+  if (parts.length === 0) return "子力持平";
+  return `${richerSide}多 ${parts.join("、")}（共 ${Math.abs(diff)} 分）`;
+}
 
 /** 新开一局标准初始局面。 */
 export function createGame(): Chess {
@@ -146,24 +187,47 @@ export function applyNotation(chess: Chess, raw: string): MoveApplyResult {
  * pickSimpleMove —— 兜底走法。
  *
  * 模型连续多轮不肯落子时，本地挑一步"不会错"的棋，避免对局卡死。
- * 优先级：吃子 > 中心格 > 推进兵 > 第一个合法走法。
+ *
+ * 之前的版本是"优先吃子"，结果挑中过最烂的一手（后去吃兵，还被兵反吃）。
+ * 现在按子力收益筛：
+ * 1. 先剔除"送子"的走法（吃子价值低于送出棋子的价值）；
+ * 2. 剩下能赚子的走法里，挑吃的目标最便宜的那种；
+ * 3. 都不会赚子就挑中心兵 / 中心格；
+ * 4. 最后退到第一个合法走法。
  * 这步会明确标注是系统代走，不会冒充模型的选择。
  */
 export function pickSimpleMove(chess: Chess): string | undefined {
   const legal = chess.moves({ verbose: true });
   if (legal.length === 0) return undefined;
 
-  const capture = legal.find((m) => m.captured !== undefined);
-  if (capture) return capture.san;
+  const value = (type?: string): number => (type ? (PIECE_VALUES[type] ?? 0) : 0);
+  const scored = legal.map((move) => {
+    const gain = value(move.captured) - value(move.piece);
+    return { move, gain };
+  });
 
-  const center = ["d4", "d5", "e4", "e5", "c4", "c5", "f4", "f5"];
-  for (const square of center) {
-    const hit = legal.find((m) => m.san.toLowerCase() === square);
-    if (hit) return hit.san;
+  // 1) 不亏子的走法（gain >= 0）
+  const safe = scored.filter((s) => s.gain >= 0);
+  const pool = safe.length > 0 ? safe : scored;
+
+  // 2) 能赚子就赚子，且优先吃便宜的（吃兵 > 吃马 > 吃车 > 吃后）
+  const gains = pool.filter((s) => s.gain > 0);
+  if (gains.length > 0) {
+    gains.sort((a, b) => value(a.move.captured) - value(b.move.captured));
+    const best = gains[0]!;
+    return best.move.san;
   }
 
-  const pawn = legal.find((m) => m.piece === "p");
-  return (pawn ?? legal[0])?.san;
+  // 3) 推中心兵
+  const center = ["d4", "d5", "e4", "e5", "c4", "c5", "f4", "f5"];
+  for (const square of center) {
+    const hit = pool.find((s) => s.move.san.toLowerCase() === square);
+    if (hit) return hit.move.san;
+  }
+
+  // 4) 走兵 / 第一个合法走法
+  const pawn = pool.find((s) => s.move.piece === "p");
+  return (pawn ?? pool[0])?.move.san;
 }
 
 /** 棋局结束状态。 */
@@ -228,10 +292,7 @@ export function buildSnapshot(
 /** 给模型看的一句话局面描述。 */
 export function describePosition(chess: Chess): string {
   const side = chess.turn() === "w" ? "白方" : "黑方";
-  const diff = materialDiff(chess);
-  const material =
-    diff === 0 ? "子力持平" : diff > 0 ? `白方多 ${diff} 个兵` : `黑方多 ${-diff} 个兵`;
-  const parts = [`轮到${side}走棋`, material];
+  const parts = [`轮到${side}走棋`, describeMaterial(chess)];
   if (chess.isCheck()) parts.push("当前一方被将军（必须应将）");
   return parts.join("，");
 }

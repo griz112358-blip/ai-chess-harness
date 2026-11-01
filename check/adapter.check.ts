@@ -20,8 +20,10 @@ import {
   gamePhase,
   legalSanMoves,
   materialDiff,
+  pickSimpleMove,
 } from "../shared/board.js";
-import { runAITurn } from "../server/adapter.js";
+import { buildStateMessage } from "../server/prompt.js";
+import { runAITurn, stripThink, ThinkFilter } from "../server/adapter.js";
 import { loadKnowledge, selectKnowledge } from "../server/knowledge.js";
 import { applyUserMove, createSession } from "../server/gameStore.js";
 import { createChessTools } from "../server/tools.js";
@@ -243,6 +245,67 @@ assert(
   textOnlyEvents.some((e) => e.type === "status" && e.text.includes("代走")),
   "日志里明确标注了「系统代走」，不冒充模型",
 );
+
+// ---------- 10. 思考块过滤 / 子力描述 / 兜底走法质量 ----------
+line();
+line("=== 10. 思考块、子力描述、兜底走法 ===");
+
+// 10a. 流式过滤 <think> 块
+const filter = new ThinkFilter();
+let outText = "";
+let thinkText = "";
+for (const chunk of ["我先想想", "<think>让我算一下 e5", "不太行", "</think>", "那我走 d5"]) {
+  const r = filter.push(chunk);
+  outText += r.out;
+  thinkText += r.think;
+}
+const tail = filter.flush();
+outText += tail.out;
+thinkText += tail.think;
+assert(!outText.includes("<think>"), "思考块没有漏进正文");
+assert(outText.includes("那我走 d5"), "正文完整保留");
+assert(thinkText.includes("让我算一下"), "思考内容被单独摘出");
+assert(stripThink("<think>abc</think>你好").trim() === "你好", "stripThink 能清掉思考块");
+
+// 10b. 思考块不会进聊天区
+const thinkChatSession = createSession({ userColor: "w" });
+applyUserMove(thinkChatSession, "d2", "d4");
+const thinkChatEvents: ServerEvent[] = [];
+await runAITurn(thinkChatSession, {
+  config: mockConfig,
+  emit: (event) => thinkChatEvents.push(event),
+  callModel: async () => ({
+    text: "<think>内部推演一大段</think>我走 d5。",
+    toolCalls: [],
+  }),
+});
+const thinkChatTexts = thinkChatEvents
+  .filter((e) => e.type === "chat")
+  .map((e) => (e as { text: string }).text)
+  .join(" ");
+assert(!thinkChatTexts.includes("内部推演"), "思考内容没有进聊天区");
+assert(thinkChatTexts.includes("我走 d5"), "正常发言进了聊天区");
+
+// 10c. 子力描述用"马/兵"而不是含糊的"个兵"
+const materialSession = createSession({ userColor: "w" });
+["e4", "d5", "d4", "e5", "dxe5", "Nf6", "exf6"].forEach((san) => {
+  materialSession.chess.move(san);
+});
+const materialText = describePosition(materialSession.chess);
+line(`子力描述：${materialText}`);
+assert(!materialText.includes("个兵"), "不再出现含糊的『多 N 个兵』");
+assert(materialText.includes("马"), "子力差异按兵种说清楚");
+
+// 10d. 兜底走法不能拿后去换被兵保护的兵
+const fallbackMove = pickSimpleMove(materialSession.chess);
+line(`兜底走法：${fallbackMove}`);
+assert(fallbackMove !== "Qxf6", "不会选出会被兵反吃的 Qxf6");
+
+// 10e. 局面消息里带上了走子历史
+const stateText = buildStateMessage(materialSession, "这步怎么样？");
+assert(stateText.includes("走子历史"), "局面消息包含走子历史");
+assert(stateText.includes("exf6"), "走子历史里能看到最近的棋");
+assert(stateText.includes("合法走法"), "局面消息包含合法走法列表");
 
 line();
 if (failures === 0) {

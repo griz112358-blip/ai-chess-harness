@@ -113,6 +113,68 @@ function emitUsage(
   });
 }
 
+/** 去掉正文里的 <think>...</think> 块。 */
+export function stripThink(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+}
+
+/**
+ * thinkFilter —— 流式过滤 <think>...</think> 块。
+ *
+ * 有些推理模型（M3 打开思考时）会把思考过程直接塞进 content，
+ * 结果一大段英文推演涌进对话区和日志。
+ * 这里把思考内容单独摘出来标成"思考"，正文里只留真正要说的话。
+ */
+export class ThinkFilter {
+  private buffer = "";
+  private inThink = false;
+
+  /** 喂入一段增量，返回 { out: 正文增量, think: 思考增量 }。 */
+  push(delta: string): { out: string; think: string } {
+    this.buffer += delta;
+    let out = "";
+    let think = "";
+    let i = 0;
+
+    while (i < this.buffer.length) {
+      if (!this.inThink) {
+        const open = this.buffer.indexOf("<think>", i);
+        if (open === -1) {
+          // 尾部可能是不完整的标签，先留着
+          const keep = Math.min(this.buffer.length - i, 7);
+          out += this.buffer.slice(i, this.buffer.length - keep);
+          i = this.buffer.length - keep;
+          break;
+        }
+        out += this.buffer.slice(i, open);
+        i = open + 7;
+        this.inThink = true;
+      } else {
+        const close = this.buffer.indexOf("</think>", i);
+        if (close === -1) {
+          think += this.buffer.slice(i);
+          i = this.buffer.length;
+          break;
+        }
+        think += this.buffer.slice(i, close);
+        i = close + 8;
+        this.inThink = false;
+      }
+    }
+
+    this.buffer = this.buffer.slice(i);
+    return { out, think };
+  }
+
+  /** 流结束时把剩下的内容吐出来。 */
+  flush(): { out: string; think: string } {
+    const rest = this.buffer;
+    this.buffer = "";
+    if (this.inThink) return { out: "", think: rest };
+    return { out: rest, think: "" };
+  }
+}
+
 /** 给前端下发权威快照。 */
 export function snapshotOf(session: GameSession): GameSnapshot {
   return buildSnapshot(session.chess, {
@@ -171,13 +233,25 @@ export async function runAITurn(session: GameSession, options: TurnOptions): Pro
       response = await mock(messages, toolTable);
       if (response.text) emit({ type: "model_text", text: response.text });
     } else {
+      // 思考块过滤：推理模型可能把 <think>...</think> 直接塞进 content，
+      // 不拆开的话一大段推演会涌进对话区和日志。
+      const filter = new ThinkFilter();
       response = await callModelStream(config, messages, toolTable, {
         onEvent: (event) => {
-          if (event.type === "text") emit({ type: "model_text", text: event.delta });
+          if (event.type === "text") {
+            const { out, think } = filter.push(event.delta);
+            if (out) emit({ type: "model_text", text: out });
+            if (think) emit({ type: "reasoning", text: think });
+          }
           if (event.type === "reasoning") emit({ type: "reasoning", text: event.delta });
         },
       });
+      const tail = filter.flush();
+      if (tail.out) emit({ type: "model_text", text: tail.out });
+      if (tail.think) emit({ type: "reasoning", text: tail.think });
     }
+    // 最终文本要进聊天区，把思考块去掉（所有分支都剥）
+    response.text = stripThink(response.text);
     emitUsage(response, messages, Date.now() - startedAt, rounds, emit);
     return response;
   };

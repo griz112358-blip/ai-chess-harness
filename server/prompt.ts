@@ -88,6 +88,8 @@ export function buildSystemPrompt(
     "7. say 用来对用户说话（点评对手刚走的一步、解释你的意图、鼓励或提问），最多 2-3 句。",
     "8. 不要输出 JSON、不要写推理过程、不要说'我已经落子'——只有 make_move 返回成功才算落子。",
     "9. 只有真的走不动了才 resign；局面僵持、双方都不占便宜时可以 offer_draw。",
+    "10. 局面信息（FEN、棋盘、走子历史、合法走法）已经给全了，不要再自己反推或重建局面，" +
+      "也不要在回复里复述棋盘——挑一个合法走法直接调用 make_move。",
     "",
     "## 可用工具",
     "- make_move(move: string) —— 走一步棋，move 为合法 SAN 记谱",
@@ -124,6 +126,10 @@ export function buildStateMessage(session: GameSession, userMessage?: string): s
     "",
     "棋盘（大写白棋，小写黑棋，. 是空格）：",
     asciiBoard(chess),
+    "",
+    `走子历史（从开局到现在，共 ${history.length} 手${
+      history.length > 20 ? "，这里只列最近 20 手" : ""
+    }）：${history.length > 0 ? history.slice(-20).join(" ") : "（还没有走子）"}`,
     "",
     lastMove
       ? `对手刚走的一步：${lastMove}（第 ${chess.moveNumber()} 手）`
