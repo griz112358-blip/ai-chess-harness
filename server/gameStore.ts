@@ -6,7 +6,7 @@
  */
 
 import { Chess } from "chess.js";
-import { createGame } from "../shared/board.js";
+import { createGame, legalSanMoves } from "../shared/board.js";
 import type { CoachLevel, PlayerColor } from "../shared/protocol.js";
 
 /** 一条对话记忆。 */
@@ -101,6 +101,43 @@ export function pushChat(session: GameSession, role: "user" | "assistant", text:
   session.chat.push({ role, text: trimmed, plyAt: session.chess.history().length });
   // 对话记忆只留最近 12 条，防止上下文无限增长
   if (session.chat.length > 12) session.chat.splice(0, session.chat.length - 12);
+}
+
+/**
+ * applyUserMove —— 用户走子：本地校验 + 执行。
+ *
+ * 规则判定完全在本地：模型和前端都不能自己改棋盘。
+ * 走完之后会清掉 AI「本回合已落子」的标记（aiMoved），
+ * 否则 AI 下一回合会被误判成"已经走过"，导致它走不了棋。
+ */
+export function applyUserMove(
+  session: GameSession,
+  from: string,
+  to: string,
+  promotion?: string,
+): { ok: true; san: string } | { ok: false; error: string } {
+  if (session.gameOver) return { ok: false, error: "对局已经结束了。" };
+  if (session.chess.turn() !== session.userColor) return { ok: false, error: "现在不是你的回合。" };
+
+  const legal = session.chess.moves({ verbose: true });
+  const match = legal.find((m) => {
+    if (m.from !== from || m.to !== to) return false;
+    if (m.promotion) return promotion ? m.promotion === promotion : false;
+    return true;
+  });
+  if (!match) {
+    if (legal.some((m) => m.from === from && m.to === to && m.promotion)) {
+      return { ok: false, error: "这是一步升变，请选择后/车/象/马。" };
+    }
+    return {
+      ok: false,
+      error: `这一步不合法。当前合法走法：${legalSanMoves(session.chess).join(" ")}`,
+    };
+  }
+
+  const move = session.chess.move(match.san);
+  session.aiMoved = false; // 轮到 AI 了，允许它落子
+  return { ok: true, san: move.san };
 }
 
 /**

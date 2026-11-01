@@ -23,13 +23,20 @@ import {
 } from "../shared/board.js";
 import { runAITurn } from "../server/adapter.js";
 import { loadKnowledge, selectKnowledge } from "../server/knowledge.js";
-import { createSession } from "../server/gameStore.js";
+import { applyUserMove, createSession } from "../server/gameStore.js";
 import { createChessTools } from "../server/tools.js";
 import type { ServerEvent } from "../shared/protocol.js";
 
 function line(t = "") {
   console.log(t);
 }
+
+/** 假配置：mock / 注入模型时不会真的发网络请求。 */
+const mockConfig = {
+  apiKey: "mock",
+  baseUrl: "https://api.minimax.io/v1",
+  model: "MiniMax-M3",
+};
 
 let failures = 0;
 function assert(cond: boolean, label: string) {
@@ -183,6 +190,59 @@ const drawSession = createSession({ userColor: "w" });
 const drawTools = createChessTools(drawSession);
 await drawTools["offer_draw"]!.execute({});
 assert(drawSession.drawOffer?.by === "b", "和棋提议记录了发起方");
+
+// ---------- 8. 多回合回归：第二轮 AI 仍能落子 ----------
+line();
+line("=== 8. 多回合回归（第二轮 AI 仍能落子）===");
+const multiSession = createSession({ userColor: "w" });
+const firstUserMove = applyUserMove(multiSession, "d2", "d4");
+assert(firstUserMove.ok, "用户第一手 d4 被接受");
+await runAITurn(multiSession, {
+  config: mockConfig,
+  emit: () => {},
+  mock: true,
+});
+assert(multiSession.chess.history().length === 2, "第一回合 AI 落子了");
+
+// 用户第二手：挑一个当前合法走法
+const secondOptions = multiSession.chess.moves({ verbose: true });
+const secondPick = secondOptions.find((m) => m.piece === "p") ?? secondOptions[0]!;
+const secondUserMove = applyUserMove(multiSession, secondPick.from, secondPick.to);
+assert(secondUserMove.ok, `用户第二手 ${secondPick.san} 被接受`);
+await runAITurn(multiSession, {
+  config: mockConfig,
+  emit: () => {},
+  mock: true,
+});
+line(`两轮后棋谱：${multiSession.chess.history().join(" ")}`);
+assert(
+  multiSession.chess.history().length === 4,
+  "第二轮 AI 仍然落子了（aiMoved 标记已正确重置）",
+);
+
+// ---------- 9. 模型只回文字不调工具：文字进聊天 + 兜底不卡死 ----------
+line();
+line("=== 9. 模型只回文字（不调工具）===");
+const textOnlySession = createSession({ userColor: "w" });
+applyUserMove(textOnlySession, "d2", "d4");
+const textOnlyEvents: ServerEvent[] = [];
+await runAITurn(textOnlySession, {
+  config: mockConfig,
+  emit: (event) => textOnlyEvents.push(event),
+  // 模拟真实故障：模型把走法用自然语言描述出来了，却没调 make_move
+  callModel: async () => ({ text: "我想走 d5，但不确定合不合法。", toolCalls: [] }),
+});
+const chatTexts = textOnlyEvents.filter((e) => e.type === "chat").map((e) => (e as { text: string }).text);
+line(`聊天区收到 ${chatTexts.length} 条：${chatTexts.join(" / ").slice(0, 120)}`);
+assert(chatTexts.length > 0, "模型说的文字被送到了聊天区");
+assert(
+  textOnlySession.chess.history().length === 2,
+  "模型始终不落子时，系统代走一步，对局没有卡死",
+);
+assert(
+  textOnlyEvents.some((e) => e.type === "status" && e.text.includes("代走")),
+  "日志里明确标注了「系统代走」，不冒充模型",
+);
 
 line();
 if (failures === 0) {

@@ -142,6 +142,30 @@ export function applyNotation(chess: Chess, raw: string): MoveApplyResult {
   };
 }
 
+/**
+ * pickSimpleMove —— 兜底走法。
+ *
+ * 模型连续多轮不肯落子时，本地挑一步"不会错"的棋，避免对局卡死。
+ * 优先级：吃子 > 中心格 > 推进兵 > 第一个合法走法。
+ * 这步会明确标注是系统代走，不会冒充模型的选择。
+ */
+export function pickSimpleMove(chess: Chess): string | undefined {
+  const legal = chess.moves({ verbose: true });
+  if (legal.length === 0) return undefined;
+
+  const capture = legal.find((m) => m.captured !== undefined);
+  if (capture) return capture.san;
+
+  const center = ["d4", "d5", "e4", "e5", "c4", "c5", "f4", "f5"];
+  for (const square of center) {
+    const hit = legal.find((m) => m.san.toLowerCase() === square);
+    if (hit) return hit.san;
+  }
+
+  const pawn = legal.find((m) => m.piece === "p");
+  return (pawn ?? legal[0])?.san;
+}
+
 /** 棋局结束状态。 */
 export function gameOutcome(chess: Chess): { over: boolean; result: string | null; reason: string | null } {
   if (!chess.isGameOver()) return { over: false, result: null, reason: null };

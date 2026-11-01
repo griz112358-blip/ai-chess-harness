@@ -18,10 +18,16 @@ import type { Request, Response } from "express";
 import { Chess } from "chess.js";
 import { callModel, listModels } from "../src/provider/minimax.js";
 import type { MiniMaxConfig } from "../src/provider/minimax.js";
-import { legalSanMoves } from "../shared/board.js";
 import type { CoachLevel, PlayerColor, ServerEvent } from "../shared/protocol.js";
 import { runAITurn, snapshotOf } from "./adapter.js";
-import { createSession, getSession, pushChat, undoPlies, type GameSession } from "./gameStore.js";
+import {
+  applyUserMove,
+  createSession,
+  getSession,
+  pushChat,
+  undoPlies,
+  type GameSession,
+} from "./gameStore.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const WEB_DIST = join(here, "..", "web", "dist");
@@ -103,34 +109,6 @@ function errorHint(error: unknown): string | undefined {
     if (typeof e.message === "string" && e.message.length > 0) return e.message;
   }
   return undefined;
-}
-
-/** 用户走子：本地校验 + 执行。 */
-function applyUserMove(
-  session: GameSession,
-  from: string,
-  to: string,
-  promotion?: string,
-): { ok: true; san: string } | { ok: false; error: string } {
-  if (session.gameOver) return { ok: false, error: "对局已经结束了。" };
-  if (session.chess.turn() !== session.userColor) return { ok: false, error: "现在不是你的回合。" };
-  const legal = session.chess.moves({ verbose: true });
-  const match = legal.find((m) => {
-    if (m.from !== from || m.to !== to) return false;
-    if (m.promotion) return promotion ? m.promotion === promotion : false;
-    return true;
-  });
-  if (!match) {
-    if (legal.some((m) => m.from === from && m.to === to && m.promotion)) {
-      return { ok: false, error: "这是一步升变，请选择后/车/象/马。" };
-    }
-    return {
-      ok: false,
-      error: `这一步不合法。当前合法走法：${legalSanMoves(session.chess).join(" ")}`,
-    };
-  }
-  const move = session.chess.move(match.san);
-  return { ok: true, san: move.san };
 }
 
 /* ------------------------------------------------------------------ *

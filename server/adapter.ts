@@ -14,12 +14,13 @@
 
 import { addAssistantMessage, addUserMessage, createAgentState } from "../src/agentState.js";
 import { runAgentLoop } from "../src/loop.js";
+import type { CallModelFn } from "../src/loop.js";
 import type { LoopEvent } from "../src/loop.js";
 import { callModelStream } from "../src/provider/minimax.js";
 import type { MiniMaxConfig } from "../src/provider/minimax.js";
 import { createSmartMockCallModel } from "../src/provider/mock.js";
 import type { ModelResponse, ToolTable } from "../src/types.js";
-import { buildSnapshot, gamePhase } from "../shared/board.js";
+import { applyNotation, buildSnapshot, gameOutcome, gamePhase, pickSimpleMove } from "../shared/board.js";
 import type { GameSnapshot, ServerEvent } from "../shared/protocol.js";
 import { loadKnowledge, selectKnowledge } from "./knowledge.js";
 import { pushChat, type GameSession } from "./gameStore.js";
@@ -39,6 +40,11 @@ export interface TurnOptions {
   emit: (event: ServerEvent) => void;
   /** 强制使用 mock 模型（离线自测）。 */
   mock?: boolean;
+  /**
+   * 自定义模型调用（测试钩子）。
+   * 传了就用它，不走 provider —— 用来复现"模型只回文字不调工具"这类行为。
+   */
+  callModel?: CallModelFn;
   /**
    * 这一回合是否必须落子。
    * true（默认）：轮到 AI 走棋，必须 make_move，没走成就纠偏重试。
@@ -106,6 +112,9 @@ export async function runAITurn(session: GameSession, options: TurnOptions): Pro
     toolTable: ToolTable,
   ): Promise<ModelResponse> => {
     rounds += 1;
+    if (options.callModel) {
+      return options.callModel(messages, toolTable);
+    }
     if (options.mock) {
       const mock = createSmartMockCallModel();
       const response = await mock(messages, toolTable);
@@ -165,8 +174,9 @@ export async function runAITurn(session: GameSession, options: TurnOptions): Pro
   // 2) 主循环 + 自修复：模型没走子就纠偏重来，最多 3 次
   //    （requireMove=false 时不纠偏——那时轮到用户走，AI 只需要说话）
   const maxAttempts = requireMove ? 3 : 1;
+  let lastText = "";
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    await runAgentLoop({
+    const outcome = await runAgentLoop({
       state,
       tools,
       callModel,
@@ -175,6 +185,7 @@ export async function runAITurn(session: GameSession, options: TurnOptions): Pro
       // AI 落子（或认输）就算这一回合完成，不再让它重复走子
       shouldStop: () => session.aiMoved || session.gameOver,
     });
+    lastText = outcome.text;
     if (!requireMove || session.aiMoved || session.gameOver) break;
     if (attempt < maxAttempts) {
       emit({
@@ -184,11 +195,41 @@ export async function runAITurn(session: GameSession, options: TurnOptions): Pro
       addUserMessage(
         state,
         "纠正：你还没有走棋。现在轮到你，必须调用 make_move，从【当前局面】的合法走法列表里走一步棋；" +
-          "想说话就同时调用 say。",
+          "不要用文字描述你的走法。想说话就同时调用 say。",
       );
     }
   }
 
-  // 3) 收尾：say 已经即时下发过了，这里只做兜底（say 工具执行失败时不显示）
+  // 3) 模型用自然语言回答（而不是调 say）时，这段文字就是它要说的话
+  if (said.length === 0 && lastText.trim().length > 0) {
+    pushChat(session, "assistant", lastText.trim());
+    emit({ type: "chat", role: "ai", text: lastText.trim() });
+  }
+
+  // 4) 兜底：纠偏多次后模型仍未落子 → 本地代走一步，避免卡死
+  //    （这一步会明确告诉用户"这是系统代走"，不冒充模型）
+  if (requireMove && !session.aiMoved && !session.gameOver) {
+    const fallback = pickSimpleMove(session.chess);
+    if (fallback) {
+      const applied = applyNotation(session.chess, fallback);
+      if (applied.ok) {
+        session.aiMoved = true;
+        const outcome = gameOutcome(session.chess);
+        if (outcome.over) {
+          session.gameOver = true;
+          session.result = outcome.result;
+          session.reason = outcome.reason;
+        }
+        emit({
+          type: "status",
+          text: `模型连续 ${maxAttempts} 轮没有落子，系统代走一步 ${applied.san}。`,
+        });
+        const message = `（我这回合没能给出走法，系统先代走了一步 ${applied.san}，这步只是兜底，不代表我的想法。）`;
+        pushChat(session, "assistant", message);
+        emit({ type: "chat", role: "ai", text: message });
+      }
+    }
+  }
+
   return { moved: session.aiMoved, said, rounds };
 }
