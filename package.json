@@ -18,8 +18,13 @@
     "chess",
     "minimax"
   ],
-  "author": "",
+  "author": "griz112358-blip",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/griz112358-blip/ai-chess-harness.git"
+  },
+  "homepage": "https://github.com/griz112358-blip/ai-chess-harness#readme",
   "dependencies": {
     "chess.js": "^1.4.0",
     "express": "^5.3.0",

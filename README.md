@@ -1,5 +1,7 @@
 # AI 国际象棋陪练 · ai-chess-harness
 
+[![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](LICENSE)
+
 一个**「大模型 + 本地业务适配器」**的完整 Demo：让 MiniMax 大模型陪人下国际象棋，
 但大模型**不能直接碰棋盘**——它只能通过约定好的工具表达意图，真正的落子由本地代码执行。
 
