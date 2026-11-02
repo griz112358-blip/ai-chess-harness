@@ -8,6 +8,25 @@
 > 这是独立项目，和 `harness-dev`（最小 Agent Harness 学习工程）互不依赖。
 > 本项目自带一份 harness 核心（`src/`），可以单独运行、单独演进。
 
+## 🚀 启动
+
+```bash
+npm install
+npm run dev
+```
+
+**打开 http://localhost:5178** → 在设置门填 MiniMax API Key → 开始下棋。
+
+| 命令 | 作用 |
+|---|---|
+| `npm run dev` | 后端 8787 + 前端 5178（开发，带热重载） |
+| `npm start` | 只起后端；已 `build` 时顺带托管前端 → http://localhost:8787 |
+| `MINIMAX_MOCK=1 npm start` | 无需 API Key，假模型走棋，链路完全一致 |
+| `npm run build` | 前端打包到 `web/dist` |
+| `npm run check` | 类型检查 + 5 个验收脚本，全量回归 |
+
+端口占用、换端口、常见问题见下方「快速开始」。
+
 ## 它在演示什么
 
 大模型只能对话，通用模型不知道你的业务要什么。想让它「帮我做事」，得做一个适配器：
@@ -35,6 +54,15 @@ npm install
 
 npm run dev     # 后端 8787 + 前端 5178，浏览器打开 http://localhost:5178
 ```
+
+> **端口被占用？** Vite 会自动往后找空闲端口并打印实际地址（`http://localhost:5179/`），
+> 但**终端里那行 `Local:` 才是真正要开的**。后端 8787 不会自动让位，
+> 如果后端启动失败，看日志里的 `EADDRINUSE`，先停掉旧的：
+>
+> ```bash
+> lsof -nP -iTCP:8787 -sTCP:LISTEN   # 找到占用进程
+> kill <pid>
+> ```
 
 打开页面 → **先填 MiniMax API Key**（设置门）：
 
